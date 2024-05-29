@@ -19,6 +19,6 @@ namespace Data.Model
         public DateTime? AccessTime { get; set; }
         public bool? IsDeleted { get; set; }
 
-        public int PackageID {  get; set; }
+        public int UserPurchasedPackageID {  get; set; }
     }
 }

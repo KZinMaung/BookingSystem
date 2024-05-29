@@ -46,44 +46,61 @@ namespace API.Services.Booking
         public async Task<ResponseModel> Book(int userID, int scheduleID)
         {
             ResponseModel response= new ResponseModel();
-            
+            //check already booked
+            var alreadyBooked = _uow.bookingRepo.GetAll().Where(a => a.IsDeleted != true && a.UserID == userID && a.ClassScheduleID == scheduleID).Any();
+            if(alreadyBooked)
+            {
+                response.ReturnMessage = "User has alredy booked this class.";
+                return response;
+            }
+
+
             //CheckPackageToBook
-            tbClassSchedule schedule =  _uow.classScheduleRepo.GetAll().Where(a => a.IsDeleted != true && a.ID == scheduleID).FirstOrDefault() ?? new tbClassSchedule();
-            tbUserPurchasedPackage availablePk = _uow.userPurchasedPackage.GetAll().Where(a => a.IsDeleted != true && a.UserID == userID && a.CountryID == schedule.CountryID).FirstOrDefault() ?? new tbUserPurchasedPackage();
+            tbClassSchedule schedule =  await _uow.classScheduleRepo.GetAll().Where(a => a.IsDeleted != true && a.ID == scheduleID).FirstOrDefaultAsync() ?? new tbClassSchedule();
+            tbUserPurchasedPackage availablePk = await _uow.userPurchasedPackage.GetAll().Where(a => a.IsDeleted != true && a.UserID == userID && a.CountryID == schedule.CountryID).FirstOrDefaultAsync() ?? new tbUserPurchasedPackage();
             if (availablePk.ID == 0)
             {
                 response.ReturnMessage = "User does not have available packages to book the class";
                 return response;
             }
+            else if( availablePk.IsExpired)
+            {
+                response.ReturnMessage = "User's package is expired.";
+                return response;
+            }
 
             
-            // Check for overlap
+            // Check for overlap time
             
             List<tbClassSchedule> bookingSchedules = new List<tbClassSchedule>();
             var bookings = _uow.bookingRepo.GetAll()
                                             .Where(a => a.IsDeleted != true && a.UserID == userID).AsQueryable();
-            var schedules = _uow.classScheduleRepo.GetAll()
-                                            .Where(a => a.IsDeleted != true).AsQueryable();
-
-            var query = from b in bookings
-                        join s in schedules on b.ClassScheduleID equals s.ID 
-                        select s;
-
-            bookingSchedules = await query.ToListAsync();  
-
-
-            foreach (var bs in bookingSchedules)
+            if(bookings.Any())
             {
-                if (schedule.StartTime < bs.EndTime && schedule.EndTime > bs.StartTime)
+                var schedules = _uow.classScheduleRepo.GetAll()
+                                           .Where(a => a.IsDeleted != true).AsQueryable();
+
+                var query = from b in bookings
+                            join s in schedules on b.ClassScheduleID equals s.ID
+                            select s;
+
+                bookingSchedules = await query.ToListAsync();
+
+
+                foreach (var bs in bookingSchedules)
                 {
-                    response.ReturnMessage = "This schedule is overlap with user's booking schedules";
-                    return response;
+                    if (schedule.StartTime < bs.EndTime && schedule.EndTime > bs.StartTime)
+                    {
+                        response.ReturnMessage = "This schedule is overlap with user's booking schedules";
+                        return response;
+                    }
                 }
+
             }
 
 
             //checkCredits
-            if(schedule.CreditsRequired > availablePk.RemainingCredits)
+            if (schedule.CreditsRequired > availablePk.RemainingCredits)
             {
                 response.ReturnMessage = "Remaining credits are not enough to book this schedule";
                 return response;
@@ -97,7 +114,8 @@ namespace API.Services.Booking
                 UsedCredits = schedule.CreditsRequired,
                 CreatedAt = MyExtension.getLocalTime(),
                 AccessTime = MyExtension.getLocalTime(),
-                PackageID = availablePk.ID
+                UserPurchasedPackageID = availablePk.ID,
+                Code  = MyExtension.getUniqueNumber(),
             };
 
 
@@ -113,11 +131,11 @@ namespace API.Services.Booking
             if (!reachLimit)
             {
                 entity.Status = "booked";
-                await _uow.bookingRepo.InsertReturnAsync(entity);
+                _ = await _uow.bookingRepo.InsertReturnAsync(entity);
 
                 //update used credits
                 availablePk.UsedCredits += schedule.CreditsRequired;
-                await _uow.userPurchasedPackage.UpdateAsync(availablePk);
+                _ = await _uow.userPurchasedPackage.UpdateAsync(availablePk);
 
 
                 response.ReturnMessage = "Successfully booked!";
@@ -126,11 +144,11 @@ namespace API.Services.Booking
             else
             {
                 entity.Status = "waiting";
-                await _uow.bookingRepo.InsertReturnAsync(entity);
+                _ = await _uow.bookingRepo.InsertReturnAsync(entity);
 
                 //update used credits
                 availablePk.UsedCredits += schedule.CreditsRequired;
-                await _uow.userPurchasedPackage.UpdateAsync(availablePk);
+                _ = await _uow.userPurchasedPackage.UpdateAsync(availablePk);
 
 
                 tbWaitingList waitingEntity = new tbWaitingList
@@ -139,9 +157,9 @@ namespace API.Services.Booking
                     ClassScheduleID = scheduleID,
                     CreatedAt = MyExtension.getLocalTime(),
                     AccessTime = MyExtension.getLocalTime(),
-                    PackageID = availablePk.ID
+                    UserPurchasedPackageID = availablePk.ID
                 };
-                await _uow.waitingListRepo.InsertReturnAsync(waitingEntity);
+                _ = await _uow.waitingListRepo.InsertReturnAsync(waitingEntity);
 
                 response.ReturnMessage = "User has been added to waiting list.";
                 return response;

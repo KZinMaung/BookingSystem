@@ -27,5 +27,8 @@ namespace Data.Model
 
         [NotMapped]
         public int RemainingCredits => TotalCredits - UsedCredits ?? 0;
+
+        [NotMapped]
+        public bool IsExpired => DateTime.Now > ExpiredDate;
     }
 }

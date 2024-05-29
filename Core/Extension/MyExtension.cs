@@ -23,6 +23,13 @@ namespace Core.Extension
 
         }
 
+        public static string getUniqueNumber()
+        {
+            byte[] buffer = Guid.NewGuid().ToByteArray();
+            string uniquecode = BitConverter.ToUInt32(buffer, 12).ToString();
+            return uniquecode;
+        }
+
 
     }
 }
