@@ -5,7 +5,9 @@ using API.Services.User;
 using Data.Model;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 using System.Text;
 
 internal class Program
@@ -38,6 +40,9 @@ internal class Program
                           {
                               options.JsonSerializerOptions.PropertyNamingPolicy = null;
                           });
+        // Configure Redis
+        builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration.GetValue<string>("Redis:ConnectionString")));
+
 
         // Add JWT Authentication
         var jwtSettings = configuration.GetSection("Jwt");
@@ -88,7 +93,8 @@ internal class Program
            ));
 
         builder.Services.AddScoped<IBooking>(s => new BookingBase(
-           s.GetService<AppDBContext>()
+           s.GetService<AppDBContext>(),
+           s.GetService<IConnectionMultiplexer>()
            ));
 
         builder.Services.AddScoped<IAuth>(s => new AuthBase(

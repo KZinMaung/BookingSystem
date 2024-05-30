@@ -10,7 +10,7 @@ namespace API.Services.Booking
     {
         Task<Model<ScheduleVM>> GetAvailableSchedules(int page, int pageSize);
 
-        Task<ResponseModel> Book(int userID, int scheduleID);
+        Task<ResponseModel> BookWithConcurrencyControl(int userID, int scheduleID);
 
         Task<Model<BookingScheduleVM>> GetBookingSchedules(int userID, int page, int pageSize);
         Task<ResponseModel> CancelBooking(int bookingID);

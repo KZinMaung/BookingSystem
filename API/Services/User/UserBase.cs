@@ -99,9 +99,8 @@ namespace API.Services.User
         //for profile
         public async Task<tbUser> GetProfile(int ID)
         {
-            tbUser user = await _uow.userRepo.GetAll()
-                .FirstOrDefaultAsync(a => a.ID == ID && a.IsDeleted != true) ?? new tbUser();
-
+            tbUser user = await _uow.userRepo.GetAll().Where(a => a.ID == ID && a.IsDeleted != true && a.IsEmailVerified != false).FirstOrDefaultAsync() ?? new tbUser();
+               
             user.Password = "";
             return user;
         }

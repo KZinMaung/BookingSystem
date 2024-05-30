@@ -26,10 +26,10 @@ namespace API.Controllers
             return Ok(result);
         }
 
-        [HttpPost("api/booking/book")]
-        public async Task<IActionResult> Book(int userID, int scheduleID)
+        [HttpPost("api/booking/book_with_concurrency_control")]
+        public async Task<IActionResult> BookWithConcurrencyControl(int userID, int scheduleID)
         {
-            var result = await this._ibooking.Book(userID, scheduleID);
+            var result = await this._ibooking.BookWithConcurrencyControl(userID, scheduleID);
             return Ok(result);
         }
 

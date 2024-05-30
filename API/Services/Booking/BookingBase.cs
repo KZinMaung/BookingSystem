@@ -7,6 +7,7 @@ using Data.ViewModel.Package;
 using Infra.Services;
 using Infra.UnitOfWork;
 using Microsoft.EntityFrameworkCore;
+using StackExchange.Redis;
 
 namespace API.Services.Booking
 {
@@ -14,12 +15,14 @@ namespace API.Services.Booking
     {
         private readonly AppDBContext _context;
         UnitOfWork _uow;
-       
-        public BookingBase(AppDBContext context)
+        private readonly IConnectionMultiplexer _redis;
+
+
+        public BookingBase(AppDBContext context, IConnectionMultiplexer redis)
         {
             this._context = context;
             this._uow = new UnitOfWork(_context);
-           
+            this._redis = redis;    
         }
 
         public async Task<Model<ScheduleVM>> GetAvailableSchedules(int page, int pageSize)
@@ -42,135 +45,6 @@ namespace API.Services.Booking
             var result = await PagingService<ScheduleVM>.getPaging(page, pageSize, query);
             return result;
         }
-
-
-        public async Task<ResponseModel> Book(int userID, int scheduleID)
-        {
-            ResponseModel response= new ResponseModel();
-            //check already booked
-            var alreadyBooked = _uow.bookingRepo.GetAll().Where(a => a.IsDeleted != true && a.UserID == userID && a.ClassScheduleID == scheduleID).Any();
-            if(alreadyBooked)
-            {
-                response.ReturnMessage = "User has alredy booked this class.";
-                return response;
-            }
-
-
-            //CheckPackageToBook
-            tbClassSchedule schedule =  await _uow.classScheduleRepo.GetAll().Where(a => a.IsDeleted != true && a.ID == scheduleID).FirstOrDefaultAsync() ?? new tbClassSchedule();
-            tbUserPurchasedPackage availablePk = await _uow.userPurchasedPackage.GetAll().Where(a => a.IsDeleted != true && a.UserID == userID && a.CountryID == schedule.CountryID).FirstOrDefaultAsync() ?? new tbUserPurchasedPackage();
-            if (availablePk.ID == 0)
-            {
-                response.ReturnMessage = "User does not have available packages to book the class";
-                return response;
-            }
-            else if( availablePk.IsExpired)
-            {
-                response.ReturnMessage = "User's package is expired.";
-                return response;
-            }
-
-            
-            // Check for overlap time
-            
-            List<tbClassSchedule> bookingSchedules = new List<tbClassSchedule>();
-            var bookings = _uow.bookingRepo.GetAll()
-                                            .Where(a => a.IsDeleted != true && a.UserID == userID).AsQueryable();
-            if(bookings.Any())
-            {
-                var schedules = _uow.classScheduleRepo.GetAll()
-                                           .Where(a => a.IsDeleted != true).AsQueryable();
-
-                var query = from b in bookings
-                            join s in schedules on b.ClassScheduleID equals s.ID
-                            select s;
-
-                bookingSchedules = await query.ToListAsync();
-
-
-                foreach (var bs in bookingSchedules)
-                {
-                    if (schedule.StartTime < bs.EndTime && schedule.EndTime > bs.StartTime)
-                    {
-                        response.ReturnMessage = "This schedule is overlap with user's booking schedules";
-                        return response;
-                    }
-                }
-
-            }
-
-
-            //checkCredits
-            if (schedule.CreditsRequired > availablePk.RemainingCredits)
-            {
-                response.ReturnMessage = "Remaining credits are not enough to book this schedule";
-                return response;
-            }
-
-            //can booked
-            tbBooking entity = new tbBooking
-            {
-                UserID = userID,
-                ClassScheduleID = scheduleID,
-                UsedCredits = schedule.CreditsRequired,
-                CreatedAt = MyExtension.getLocalTime(),
-                AccessTime = MyExtension.getLocalTime(),
-                UserPurchasedPackageID = availablePk.ID,
-                Code  = MyExtension.getUniqueNumber(),
-            };
-
-
-            //checkAvailableSlots
-            bool reachLimit = false;
-            int bookingCount = _uow.bookingRepo.GetAll().Where(a => a.IsDeleted != true && a.ClassScheduleID == scheduleID && a.Status == "booked").Count();
-            if(bookingCount >= schedule.TotalSlots)
-            {
-                reachLimit = true;
-            }
-
-            
-            if (!reachLimit)
-            {
-                entity.Status = "booked";
-                _ = await _uow.bookingRepo.InsertReturnAsync(entity);
-
-                //update used credits
-                availablePk.UsedCredits += schedule.CreditsRequired;
-                availablePk.AccessTime = DateTime.Now;
-                _ = await _uow.userPurchasedPackage.UpdateAsync(availablePk);
-
-
-                response.ReturnMessage = "Successfully booked!";
-                return response;
-            }
-            else
-            {
-                entity.Status = "waiting";
-                _ = await _uow.bookingRepo.InsertReturnAsync(entity);
-
-                //update used credits
-                availablePk.UsedCredits += schedule.CreditsRequired;
-                availablePk.AccessTime = DateTime.Now;
-                _ = await _uow.userPurchasedPackage.UpdateAsync(availablePk);
-
-
-                tbWaitingList waitingEntity = new tbWaitingList
-                {
-                    UserID = userID,
-                    ClassScheduleID = scheduleID,
-                    CreatedAt = MyExtension.getLocalTime(),
-                    AccessTime = MyExtension.getLocalTime(),
-                    UserPurchasedPackageID = availablePk.ID
-                };
-                _ = await _uow.waitingListRepo.InsertReturnAsync(waitingEntity);
-
-                response.ReturnMessage = "User has been added to waiting list.";
-                return response;
-
-            }
-
-        }
-
 
         public async Task<Model<BookingScheduleVM>> GetBookingSchedules(int userID, int page, int pageSize)
         {
@@ -365,6 +239,205 @@ namespace API.Services.Booking
             response.ReturnMessage = "Successfully check in to the booked class";
             return response;
         }
+
+        //Booking
+        private async Task<ResponseModel> Book(int userID, int scheduleID)
+        {
+            ResponseModel response = new ResponseModel();
+
+            if (IsAlreadyBooked(userID, scheduleID))
+            {
+                response.ReturnMessage = "User has already booked this class.";
+                return response;
+            }
+
+            var schedule = await GetSchedule(scheduleID);
+            var availablePk = await GetUserPurchasedPackage(userID, schedule.CountryID);
+
+            if (availablePk.ID == 0)
+            {
+                response.ReturnMessage = "User does not have available packages to book the class";
+                return response;
+            }
+            else if (availablePk.IsExpired)
+            {
+                response.ReturnMessage = "User's package is expired.";
+                return response;
+            }
+
+            if (HasOverlapTime(userID, schedule))
+            {
+                response.ReturnMessage = "This schedule overlaps with user's booked schedules.";
+                return response;
+            }
+
+            if (!HasEnoughCredits(schedule, availablePk))
+            {
+                response.ReturnMessage = "Remaining credits are not enough to book this schedule";
+                return response;
+            }
+
+            if (!HasAvailableSlots(schedule))
+            {
+                response.ReturnMessage = "No available slots for this schedule. User has been added to waiting list.";
+                await AddToWaitingList(userID, scheduleID, availablePk.ID);
+                return response;
+            }
+
+            //can book
+            bool isSuccess = await BookSchedule(userID, scheduleID, schedule, availablePk);
+            if (isSuccess)
+            {
+                response.ReturnMessage = "Successfully booked!";
+                return response;
+            }
+            else
+            {
+                response.ReturnMessage = "Something went wrong!";
+                return response;
+            }
+        }
+
+        private bool IsAlreadyBooked(int userID, int scheduleID)
+        {
+            return _uow.bookingRepo.GetAll().Any(a => a.IsDeleted != true && a.UserID == userID && a.ClassScheduleID == scheduleID);
+        }
+
+        private async Task<tbClassSchedule> GetSchedule(int scheduleID)
+        {
+            return await _uow.classScheduleRepo.GetAll().FirstOrDefaultAsync(a => a.IsDeleted != true && a.ID == scheduleID) ?? new tbClassSchedule();
+        }
+
+        private async Task<tbUserPurchasedPackage> GetUserPurchasedPackage(int userID, int countryID)
+        {
+            return await _uow.userPurchasedPackage.GetAll()
+                .FirstOrDefaultAsync(a => a.IsDeleted != true && a.UserID == userID && a.CountryID == countryID) ?? new tbUserPurchasedPackage();
+        }
+
+        private bool HasOverlapTime(int userID, tbClassSchedule schedule)
+        {
+            var bookingSchedules = _uow.bookingRepo.GetAll()
+                .Where(a => a.IsDeleted != true && a.UserID == userID)
+                .Join(_uow.classScheduleRepo.GetAll().Where(a => a.IsDeleted != true),
+                    b => b.ClassScheduleID,
+                    s => s.ID,
+                    (b, s) => s);
+
+            return bookingSchedules.Any(bs => schedule.StartTime < bs.EndTime && schedule.EndTime > bs.StartTime);
+        }
+
+        private bool HasEnoughCredits(tbClassSchedule schedule, tbUserPurchasedPackage availablePk)
+        {
+            return schedule.CreditsRequired <= availablePk.RemainingCredits;
+        }
+
+        private bool HasAvailableSlots(tbClassSchedule schedule)
+        {
+            int bookingCount = _uow.bookingRepo.GetAll()
+                .Count(a => a.IsDeleted != true && a.ClassScheduleID == schedule.ID && a.Status == "booked");
+
+            return bookingCount < schedule.TotalSlots;
+        }
+
+        private async Task<bool> BookSchedule(int userID, int scheduleID, tbClassSchedule schedule, tbUserPurchasedPackage availablePk)
+        {
+            var entity = new tbBooking
+            {
+                UserID = userID,
+                ClassScheduleID = scheduleID,
+                UsedCredits = schedule.CreditsRequired,
+                CreatedAt = MyExtension.getLocalTime(),
+                AccessTime = MyExtension.getLocalTime(),
+                UserPurchasedPackageID = availablePk.ID,
+                Code = MyExtension.getUniqueNumber(),
+                Status = "booked"
+            };
+
+            var result = await _uow.bookingRepo.InsertReturnAsync(entity);
+            if (result == null)
+                return false;
+
+            availablePk.UsedCredits += schedule.CreditsRequired;
+            availablePk.AccessTime = DateTime.Now;
+            var a = await _uow.userPurchasedPackage.UpdateAsync(availablePk);
+            if(a == null)
+            {
+                //rollback
+                result.IsDeleted = true;
+                result.AccessTime = DateTime.Now;
+                await _uow.bookingRepo.UpdateAsync(result);
+                return false;
+            }
+
+            return true;
+        }
+
+        private async Task AddToWaitingList(int userID, int scheduleID, int userPurchasedPackageID)
+        {
+            var waitingEntity = new tbWaitingList
+            {
+                UserID = userID,
+                ClassScheduleID = scheduleID,
+                CreatedAt = MyExtension.getLocalTime(),
+                AccessTime = MyExtension.getLocalTime(),
+                UserPurchasedPackageID = userPurchasedPackageID
+            };
+
+            await _uow.waitingListRepo.InsertReturnAsync(waitingEntity);
+        }
+
+        public async Task<ResponseModel> BookWithConcurrencyControl(int userID, int scheduleID)
+        {
+            ResponseModel response = new ResponseModel();
+            var db = _redis.GetDatabase();
+            string activeRequestsKey = "active:requests";
+            string lockKey = "lock:active:requests";
+            int maxConcurrentRequests = 5;
+
+            // Acquire a lock
+            bool lockAcquired = await db.LockTakeAsync(lockKey, Environment.MachineName, TimeSpan.FromSeconds(30));
+
+            if (!lockAcquired)
+            {
+                response.ReturnMessage = "Too many requests. Please try again later.";
+                return response;
+            }
+
+            try
+            {
+                // Get current active requests
+                int currentActiveRequests = (int)await db.StringGetAsync(activeRequestsKey);
+
+                if (currentActiveRequests >= maxConcurrentRequests)
+                {
+                    response.ReturnMessage = "Too many requests. Please try again later.";
+                    return response;
+                }
+
+                // Increment the active request count
+                await db.StringIncrementAsync(activeRequestsKey);
+
+                // Call the Book method logic
+                response = await Book(userID, scheduleID);
+
+                // Simulate booking logic
+                await Task.Delay(1000);
+
+                // Decrement the active request count
+                await db.StringDecrementAsync(activeRequestsKey);
+            }
+            finally
+            {
+                // Release the lock
+                await db.LockReleaseAsync(lockKey, Environment.MachineName);
+            }
+
+            return response;
+        }
+
+
+
+
 
     }
 
