@@ -1,8 +1,11 @@
 using API.Services.Auth;
 using API.Services.Booking;
 using API.Services.Package;
+using API.Services.Scheduler;
 using API.Services.User;
 using Data.Model;
+using Hangfire;
+using Hangfire.SqlServer;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +46,22 @@ internal class Program
         // Configure Redis
         builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration.GetValue<string>("Redis:ConnectionString")));
 
+
+        // Configure Hangfire
+        builder.Services.AddHangfire(configuration => configuration
+            .SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
+            .UseSimpleAssemblyNameTypeSerializer()
+            .UseDefaultTypeSerializer()
+            .UseSqlServerStorage("Data Source=DESKTOP-4H1LAGN\\SQLEXPRESS;Initial Catalog=BookingSystem;User ID=admin1;Password=123123;MultipleActiveResultSets=True;TrustServerCertificate=True", new SqlServerStorageOptions
+            {
+                CommandBatchMaxTimeout = TimeSpan.FromMinutes(5),
+                SlidingInvisibilityTimeout = TimeSpan.FromMinutes(5),
+                QueuePollInterval = TimeSpan.Zero,
+                UseRecommendedIsolationLevel = true,
+                UsePageLocksOnDequeue = true,
+                DisableGlobalLocks = true
+            }));
+        builder.Services.AddHangfireServer();
 
         // Add JWT Authentication
         var jwtSettings = configuration.GetSection("Jwt");
@@ -92,9 +111,13 @@ internal class Program
            s.GetService<AppDBContext>()
            ));
 
+        builder.Services.AddScoped<RefundJobScheduler>();
+
+
         builder.Services.AddScoped<IBooking>(s => new BookingBase(
            s.GetService<AppDBContext>(),
-           s.GetService<IConnectionMultiplexer>()
+           s.GetService<IConnectionMultiplexer>(),
+           s.GetService<RefundJobScheduler>()
            ));
 
         builder.Services.AddScoped<IAuth>(s => new AuthBase(

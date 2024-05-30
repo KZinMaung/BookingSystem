@@ -1,4 +1,5 @@
-﻿using Azure;
+﻿using API.Services.Scheduler;
+using Azure;
 using Core.Extension;
 using Data.Model;
 using Data.ViewModel;
@@ -16,13 +17,14 @@ namespace API.Services.Booking
         private readonly AppDBContext _context;
         UnitOfWork _uow;
         private readonly IConnectionMultiplexer _redis;
+        private readonly RefundJobScheduler _refundJobScheduler;
 
-
-        public BookingBase(AppDBContext context, IConnectionMultiplexer redis)
+        public BookingBase(AppDBContext context, IConnectionMultiplexer redis, RefundJobScheduler refundJobScheduler)
         {
             this._context = context;
             this._uow = new UnitOfWork(_context);
-            this._redis = redis;    
+            this._redis = redis;
+            this._refundJobScheduler = refundJobScheduler;
         }
 
         public async Task<Model<ScheduleVM>> GetAvailableSchedules(int page, int pageSize)
@@ -384,6 +386,10 @@ namespace API.Services.Booking
             };
 
             await _uow.waitingListRepo.InsertReturnAsync(waitingEntity);
+
+            tbClassSchedule cs = await GetScheduleByID(scheduleID);
+            // Schedule the refund job for the class end time
+            _refundJobScheduler.ScheduleRefundJob(scheduleID, cs.EndTime);
         }
 
         public async Task<ResponseModel> BookWithConcurrencyControl(int userID, int scheduleID)
