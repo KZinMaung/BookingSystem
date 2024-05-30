@@ -11,5 +11,11 @@ namespace API.Services.Booking
         Task<Model<ScheduleVM>> GetAvailableSchedules(int page, int pageSize);
 
         Task<ResponseModel> Book(int userID, int scheduleID);
+
+        Task<Model<BookingScheduleVM>> GetBookingSchedules(int userID, int page, int pageSize);
+        Task<ResponseModel> CancelBooking(int bookingID);
+        Task<ResponseModel> RefundWaitlistCredits(int scheduleID);
+        Task<ResponseModel> CheckIn(int bookingId);
+
     }
 }

@@ -1,11 +1,12 @@
 ﻿using API.Services.Package;
 using API.Services.User;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace API.Controllers
 {
-    
+    [Authorize]
     [ApiController]
     public class PackageController : ControllerBase
     {
@@ -32,6 +33,12 @@ namespace API.Controllers
             return Ok(result);
         }
 
+        [HttpGet("api/package/purchase_package")]
+        public async Task<IActionResult> PurchasePackage(int userID, int packageID)
+        {
+            var result = await this._ipackage.PurchasePackage(userID, packageID);
+            return Ok(result);
+        }
 
     }
 }

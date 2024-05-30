@@ -1,8 +1,11 @@
 ﻿using Core.Extension;
 using Data.Model;
+using Data.ViewModel;
 using Data.ViewModel.Package;
 using Infra.Services;
 using Infra.UnitOfWork;
+using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
 using System.Linq.Expressions;
 
 namespace API.Services.Package
@@ -70,6 +73,51 @@ namespace API.Services.Package
             var result = await PagingService<PurchasedPackageVM>.getPaging(page, pageSize, query);
             return result;
         }
+
+
+        public async Task<ResponseModel> PurchasePackage(int userID, int packageID)
+        {
+            ResponseModel response = new ResponseModel();
+            tbPackage package = await _uow.packageRepo.GetAll().Where(a => a.IsDeleted != true && a.ID == packageID).FirstOrDefaultAsync() ?? new tbPackage();
+            if(package.ID == 0)
+            {
+                response.ReturnMessage = "The package does not exist";
+                return response;
+            }
+            tbUserPurchasedPackage pp = new tbUserPurchasedPackage
+            {
+                UserID = userID,
+                PackageID = packageID,
+                PurchasedDate = DateTime.Now,
+                ExpiredDate = package.ExpiredDate,
+                CreatedAt = DateTime.Now,
+                IsDeleted = false,
+                AccessTime = DateTime.Now,
+                TotalCredits = package.Credits,
+                UsedCredits = 0,
+                CountryID = package.CountryID
+            };
+            var result = await _uow.userPurchasedPackage.InsertReturnAsync(pp);
+            if(result != null)
+            {
+                var isPaid = PaymentCharge();
+                if(isPaid)
+                {
+                    response.ReturnMessage = "User has purchased the package successfully.";
+                    return response;
+                }
+            }
+        
+            response.ReturnMessage = "Failed purchase!";
+            return response;
+            
+        }
+
+        private bool PaymentCharge()
+        {
+            return true;
+        }
+
 
     }
 }

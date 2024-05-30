@@ -1,8 +1,12 @@
+using API.Services.Auth;
 using API.Services.Booking;
 using API.Services.Package;
 using API.Services.User;
 using Data.Model;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 internal class Program
 {
@@ -13,6 +17,8 @@ internal class Program
         // Add services to the container.
 
         var MyAllowSpecificOrigins = "_myAllowSpecificOrigins";
+        var configuration = builder.Configuration;
+
         builder.Services.AddCors(options =>
         {
             options.AddPolicy(name: MyAllowSpecificOrigins,
@@ -24,6 +30,8 @@ internal class Program
                               });
         });
 
+        
+
         //builder.Services.AddControllers();
         builder.Services.AddControllersWithViews()
                           .AddJsonOptions(options =>
@@ -31,7 +39,30 @@ internal class Program
                               options.JsonSerializerOptions.PropertyNamingPolicy = null;
                           });
 
+        // Add JWT Authentication
+        var jwtSettings = configuration.GetSection("Jwt");
+        var key = Encoding.ASCII.GetBytes(jwtSettings["secret"]);
+        var issuer = jwtSettings["Issuer"];
+        var audience = jwtSettings["Audience"];
 
+        builder.Services.AddAuthentication(options =>
+        {
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = issuer,
+                ValidAudience = audience,
+                IssuerSigningKey = new SymmetricSecurityKey(key)
+            };
+        });
 
         // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
         builder.Services.AddEndpointsApiExplorer();
@@ -60,6 +91,10 @@ internal class Program
            s.GetService<AppDBContext>()
            ));
 
+        builder.Services.AddScoped<IAuth>(s => new AuthBase(
+          s.GetService<AppDBContext>(), configuration
+          ));
+
 
 
         var app = builder.Build();
@@ -73,6 +108,7 @@ internal class Program
 
         app.UseHttpsRedirection();
 
+        app.UseAuthentication();
         app.UseAuthorization();
 
         app.MapControllers();
